@@ -79,6 +79,7 @@ def log_lead(raw_text: str, decision: LeadDecision, chat_id: int) -> bool:
         ]
         worksheet.append_row(row, value_input_option="USER_ENTERED")
         return True
-    except Exception as e:  # noqa: BLE001
-        logger.error("Error al loguear en Google Sheets: %s", e)
+    except Exception:
+        logger.exception("Error completo al loguear en Google Sheets")
         return False
+
