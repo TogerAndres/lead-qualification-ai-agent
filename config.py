@@ -1,72 +1,44 @@
 """
-Configuración centralizada del proyecto.
+Configuración centralizada del servicio.
 
-Todas las credenciales se leen desde variables de entorno (.env).
-Nunca deben almacenarse credenciales directamente en el código.
+Todo se lee de variables de entorno. En Cloud Run, las credenciales de Google
+(Sheets) NO se leen de un archivo: se usa la Service Account adjunta a la propia
+revisión de Cloud Run vía Application Default Credentials (ADC). Ver sheets_logger.py.
 """
+from __future__ import annotations
 
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
 
-# ==========================================================
-# Telegram
-# ==========================================================
+def _get_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
 
+
+# --- Telegram ---
 TELEGRAM_BOT_TOKEN: str | None = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_WEBHOOK_SECRET: str | None = os.getenv("TELEGRAM_WEBHOOK_SECRET")
 
-# URL pública de Cloud Run
-# Ejemplo:
-# https://lead-agent-xxxxx-uc.a.run.app
-WEBHOOK_URL: str | None = os.getenv("WEBHOOK_URL")
-
-
-# ==========================================================
-# Gemini
-# ==========================================================
-
+# --- Gemini ---
 GEMINI_API_KEY: str | None = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_TIMEOUT_SECONDS: float = float(os.getenv("GEMINI_TIMEOUT_SECONDS", "20"))
+GEMINI_MAX_RETRIES: int = int(os.getenv("GEMINI_MAX_RETRIES", "2"))
 
-GEMINI_MODEL: str = os.getenv(
-    "GEMINI_MODEL",
-    "gemini-2.5-flash",
-)
-
-
-# ==========================================================
-# Google Sheets
-# ==========================================================
-
-GOOGLE_SERVICE_ACCOUNT_FILE: str = os.getenv(
-    "GOOGLE_SERVICE_ACCOUNT_FILE",
-    "service_account.json",
-)
-
+# --- Google Sheets ---
 GOOGLE_SHEET_ID: str | None = os.getenv("GOOGLE_SHEET_ID")
+GOOGLE_SHEET_NAME: str = os.getenv("GOOGLE_SHEET_NAME", "Leads")
 
-GOOGLE_SHEET_NAME: str = os.getenv(
-    "GOOGLE_SHEET_NAME",
-    "Leads",
-)
-
-
-# ==========================================================
-# Flask / Cloud Run
-# ==========================================================
-
+# --- Servicio ---
 PORT: int = int(os.getenv("PORT", "8080"))
-
-DEBUG: bool = os.getenv(
-    "DEBUG",
-    "False",
-).lower() == "true"
-
-
-# ==========================================================
-# Validaciones
-# ==========================================================
+MAX_MESSAGE_LENGTH: int = int(os.getenv("MAX_MESSAGE_LENGTH", "4000"))
+LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
 REQUIRED_VARS = {
     "TELEGRAM_BOT_TOKEN": TELEGRAM_BOT_TOKEN,
@@ -76,20 +48,11 @@ REQUIRED_VARS = {
 
 
 def validate_config() -> None:
-    """
-    Verifica que existan todas las variables críticas antes
-    de iniciar la aplicación.
-    """
-
-    missing = [
-        key
-        for key, value in REQUIRED_VARS.items()
-        if not value
-    ]
-
+    """Falla rápido y con mensaje claro si falta alguna variable crítica."""
+    missing = [name for name, value in REQUIRED_VARS.items() if not value]
     if missing:
         raise EnvironmentError(
-            "Faltan las siguientes variables de entorno:\n\n"
-            + "\n".join(f"- {item}" for item in missing)
-            + "\n\nRevisa tu archivo .env."
+            f"Faltan variables de entorno requeridas: {', '.join(missing)}. "
+            f"Revisa tu .env (local) o la configuración de variables/secretos en "
+            f"Cloud Run (producción)."
         )

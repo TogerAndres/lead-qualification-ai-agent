@@ -1,111 +1,72 @@
 """
-Bot de Telegram para calificación de leads.
+Inicializa el Application de python-telegram-bot (v21, async) y expone un
+puente síncrono para que app.py (Flask, síncrono) pueda alimentarle updates
+recibidos por webhook.
 
-Flujo:
-1. Usuario envía texto libre con datos de un lead.
-2. Se clasifica contra el ICP usando Gemini (llm_classifier.py).
-3. Se responde en el mismo chat con la decisión y el razonamiento.
-4. Se loguea el resultado en Google Sheets (sheets_logger.py).
-
-Manejo de errores: cualquier fallo en clasificación o logging se captura,
-se informa al usuario de forma clara, y queda registrado en logs — el bot
-nunca se cae por un error de una sola solicitud.
+python-telegram-bot es async-first; Flask + gunicorn son síncronos. La forma
+limpia de conectarlos sin reescribir todo en asyncio es: correr un único event
+loop persistente en un hilo de fondo, y usar
+`asyncio.run_coroutine_threadsafe` para programar corrutinas desde el handler
+síncrono de Flask, esperando el resultado con `.result(timeout=...)`.
 """
+from __future__ import annotations
+
+import asyncio
 import logging
+import threading
 
 from telegram import Update
-from telegram.constants import ChatAction
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 
-from config import TELEGRAM_BOT_TOKEN, validate_config
-from llm_classifier import classify_lead
-from sheets_logger import log_lead
+from config import TELEGRAM_BOT_TOKEN
+from handlers import error_handler, lead_message_handler, start_handler
 
-logging.basicConfig(
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    level=logging.INFO,
-)
 logger = logging.getLogger(__name__)
 
-MAX_MESSAGE_LENGTH = 4000  # límite defensivo para evitar abuso / costes de API descontrolados
+application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+application.add_handler(CommandHandler("start", start_handler))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, lead_message_handler))
+application.add_error_handler(error_handler)
+
+_loop = asyncio.new_event_loop()
+_loop_thread = threading.Thread(target=_loop.run_forever, daemon=True, name="ptb-event-loop")
+_loop_thread.start()
+
+_initialized = False
+_init_lock = threading.Lock()
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 Hola, soy el bot de calificación de leads.\n\n"
-        "Envíame los datos de un lead en texto libre, por ejemplo:\n"
-        '"Empresa de consultoría, 15 empleados, Madrid, quieren automatizar '
-        'su proceso de ventas."\n\n'
-        "Te diré si el lead está cualificado según nuestro ICP y por qué."
-    )
-
-
-async def handle_lead_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message
-    if not message or not message.text:
+def _ensure_initialized() -> None:
+    """Inicializa el Application (una sola vez) en el event loop de fondo."""
+    global _initialized
+    if _initialized:
         return
-
-    raw_text = message.text.strip()
-    chat_id = message.chat_id
-
-    # Validación defensiva de entrada — evita gastar tokens en mensajes vacíos/absurdos
-    if len(raw_text) < 5:
-        await message.reply_text(
-            "Necesito un poco más de contexto sobre el lead (empresa, tamaño, "
-            "ubicación, interés) para poder evaluarlo."
-        )
-        return
-
-    if len(raw_text) > MAX_MESSAGE_LENGTH:
-        await message.reply_text(
-            f"El mensaje es demasiado largo ({len(raw_text)} caracteres). "
-            f"Por favor resume los datos del lead en menos de {MAX_MESSAGE_LENGTH} caracteres."
-        )
-        return
-
-    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-
-    try:
-        decision = classify_lead(raw_text)
-    except Exception as e:  # noqa: BLE001 — red de seguridad final, classify_lead ya maneja sus propios errores
-        logger.exception("Error inesperado clasificando el lead: %s", e)
-        await message.reply_text(
-            "⚠️ Tuve un problema analizando este lead. Ya quedó registrado el error "
-            "y no se pudo completar la evaluación automática. Inténtalo de nuevo en unos minutos."
-        )
-        return
-
-    icon = "✅" if decision["qualified"] else "❌"
-    label = "CUALIFICADO" if decision["qualified"] else "NO CUALIFICADO"
-    reply = (
-        f"{icon} *{label}* (confianza: {decision['confidence']})\n\n"
-        f"{decision['reasoning']}"
-    )
-    await message.reply_text(reply, parse_mode="Markdown")
-
-    logged_ok = log_lead(raw_text, decision, chat_id)
-    if not logged_ok:
-        logger.warning("El lead se clasificó pero NO se pudo loguear en Google Sheets (chat_id=%s)", chat_id)
-        # No se lo mostramos al usuario final: es un problema interno, no suyo.
-        # Pero queda en logs para que el equipo lo detecte.
+    with _init_lock:
+        if _initialized:
+            return
+        future = asyncio.run_coroutine_threadsafe(application.initialize(), _loop)
+        future.result(timeout=30)
+        _initialized = True
+        logger.info("Telegram Application inicializado correctamente.")
 
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    logger.error("Excepción no capturada: %s", context.error, exc_info=context.error)
+def process_update(update_data: dict, timeout: float = 25.0) -> None:
+    """
+    Punto de entrada síncrono llamado desde el endpoint /webhook de Flask.
+    Convierte el JSON crudo de Telegram en un Update y lo procesa.
+    """
+    _ensure_initialized()
+    update = Update.de_json(update_data, application.bot)
+    future = asyncio.run_coroutine_threadsafe(application.process_update(update), _loop)
+    future.result(timeout=timeout)
 
 
-def main():
-    validate_config()
+def set_webhook_sync(webhook_url: str, secret_token: str | None = None, timeout: float = 30.0) -> None:
+    """Registra la URL de webhook ante Telegram. Pensado para usarse una vez tras el deploy."""
+    _ensure_initialized()
 
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    async def _set():
+        await application.bot.set_webhook(url=webhook_url, secret_token=secret_token)
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_lead_message))
-    app.add_error_handler(error_handler)
-
-    logger.info("Bot iniciado. Escuchando mensajes...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
-
-
-if __name__ == "__main__":
-    main()
+    future = asyncio.run_coroutine_threadsafe(_set(), _loop)
+    future.result(timeout=timeout)

@@ -1,177 +1,81 @@
 """
-app.py
+Entrada Flask del microservicio. Expone:
 
-Punto de entrada de la aplicación para Google Cloud Run.
+  GET  /            -> health check simple para Cloud Run ("OK")
+  GET  /health       -> health check explícito (JSON)
+  GET  /metrics      -> métricas en memoria del servicio
+  POST /webhook      -> recibe updates de Telegram
 
-Responsabilidades:
-- Exponer endpoints de salud.
-- Recibir Webhooks de Telegram.
-- Procesar actualizaciones.
-- Configurar automáticamente el webhook.
+El webhook valida el header `X-Telegram-Bot-Api-Secret-Token` (si se configuró
+TELEGRAM_WEBHOOK_SECRET) para asegurarse de que la petición viene realmente de
+Telegram y no de un tercero que adivinó la URL.
 """
+from __future__ import annotations
 
 import logging
 
 from flask import Flask, jsonify, request
-from telegram import Update
 
-from bot import application
-from config import (
-    PORT,
-    TELEGRAM_BOT_TOKEN,
-    WEBHOOK_URL,
-)
+import metrics
+from bot import process_update
+from config import LOG_LEVEL, TELEGRAM_WEBHOOK_SECRET, validate_config
 
 logging.basicConfig(
-    level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
 )
-
 logger = logging.getLogger(__name__)
+
+validate_config()
 
 app = Flask(__name__)
 
-_initialized = False
-
-
-async def initialize_bot():
-    """
-    Inicializa python-telegram-bot una única vez.
-    """
-
-    global _initialized
-
-    if not _initialized:
-        await application.initialize()
-        await application.start()
-        _initialized = True
-        logger.info("Telegram Application inicializada.")
-
-
-@app.before_request
-async def before_request():
-    await initialize_bot()
-
-
-# ==========================================================
-# Health Checks
-# ==========================================================
 
 @app.get("/")
 def index():
-    return "Lead Qualification AI Agent running.", 200
+    """Health check raíz — Cloud Run lo usa para saber que el contenedor arrancó."""
+    return "OK", 200
 
 
 @app.get("/health")
 def health():
-    return (
-        jsonify(
-            {
-                "status": "ok",
-                "service": "Lead Qualification AI Agent",
-            }
-        ),
-        200,
-    )
+    """Health check explícito en JSON, útil para monitoreo externo."""
+    return jsonify({"status": "ok"}), 200
 
 
-# ==========================================================
-# Telegram Webhook
-# ==========================================================
+@app.get("/metrics")
+def get_metrics():
+    """Métricas en memoria: leads procesados, cualificados, rechazados, tiempo promedio."""
+    return jsonify(metrics.snapshot()), 200
+
 
 @app.post("/webhook")
-async def webhook():
+def webhook():
+    """Recibe un update de Telegram y lo procesa de forma síncrona (vía bot.process_update)."""
+    if TELEGRAM_WEBHOOK_SECRET:
+        received_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+        if received_secret != TELEGRAM_WEBHOOK_SECRET:
+            logger.warning("Webhook rechazado: secret_token inválido o ausente.")
+            return jsonify({"error": "unauthorized"}), 401
+
+    update_data = request.get_json(silent=True)
+    if update_data is None:
+        logger.warning("Webhook recibió un body que no es JSON válido.")
+        return jsonify({"error": "invalid payload"}), 400
 
     try:
+        process_update(update_data)
+    except Exception as e:  # noqa: BLE001 — nunca dejar caer el proceso por un update
+        logger.exception("Error procesando update de Telegram: %s", e)
+        # Igual respondemos 200: Telegram reintentará si devolvemos error, y no
+        # queremos reintentos infinitos de un update que ya falló de forma no transitoria.
+        return jsonify({"status": "error logged"}), 200
 
-        secret = request.headers.get(
-            "X-Telegram-Bot-Api-Secret-Token"
-        )
-
-        if secret != TELEGRAM_BOT_TOKEN[:20]:
-            return (
-                jsonify(
-                    {
-                        "error": "Unauthorized",
-                    }
-                ),
-                401,
-            )
-
-        update = Update.de_json(
-            request.get_json(force=True),
-            application.bot,
-        )
-
-        await application.process_update(update)
-
-        return "OK", 200
-
-    except Exception:
-
-        logger.exception("Error procesando webhook")
-
-        return (
-            jsonify(
-                {
-                    "status": "error",
-                }
-            ),
-            500,
-        )
-
-
-# ==========================================================
-# Configurar Webhook
-# ==========================================================
-
-@app.get("/set-webhook")
-async def set_webhook():
-
-    if not WEBHOOK_URL:
-
-        return (
-            jsonify(
-                {
-                    "error": "WEBHOOK_URL no configurada.",
-                }
-            ),
-            500,
-        )
-
-    await initialize_bot()
-
-    success = await application.bot.set_webhook(
-        url=f"{WEBHOOK_URL}/webhook",
-        secret_token=TELEGRAM_BOT_TOKEN[:20],
-        drop_pending_updates=True,
-    )
-
-    return jsonify(
-        {
-            "success": success,
-            "webhook": f"{WEBHOOK_URL}/webhook",
-        }
-    )
-
-
-@app.get("/delete-webhook")
-async def delete_webhook():
-
-    await initialize_bot()
-
-    success = await application.bot.delete_webhook()
-
-    return jsonify(
-        {
-            "success": success,
-        }
-    )
+    return jsonify({"status": "ok"}), 200
 
 
 if __name__ == "__main__":
+    # Solo para desarrollo local (python app.py). En producción corre gunicorn (ver Dockerfile).
+    from config import PORT
 
-    app.run(
-        host="0.0.0.0",
-        port=PORT,
-    )
+    app.run(host="0.0.0.0", port=PORT, debug=False)
