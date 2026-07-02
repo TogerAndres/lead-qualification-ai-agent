@@ -306,30 +306,20 @@ encabezado con formato.
 > observabilidad básica, desplegado en Cloud Run sin credenciales en disco y con
 > mitigaciones explícitas contra prompt injection.
 
-## 📄 Licencia
 
-Este proyecto está bajo la licencia **MIT**.
+## 👤 Author
 
-```
-MIT License
+**Roger Andrés Álvarez Díaz**
+Computer Science and Systems Engineering
 
-Copyright (c) 2026 Lead Qualification Agent
+<p>
+  <a href="https://github.com/TogerAndres">
+    <img src="https://img.shields.io/badge/GitHub-TogerAndres-181717?style=for-the-badge&logo=github&logoColor=white" alt="GitHub">
+  </a>
+  <a href="https://www.linkedin.com/in/roger-andrés-alvarez-diaz-52b395333/">
+    <img src="https://img.shields.io/badge/LinkedIn-Roger%20Andrés%20Álvarez%20Díaz-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white" alt="LinkedIn">
+  </a>
+</p>
 
-Se concede permiso, sin cargo, a cualquier persona que obtenga una copia de este
-software y de los archivos de documentación asociados, para utilizar el software
-sin restricción, incluyendo sin limitación los derechos de uso, copia, modificación,
-fusión, publicación, distribución, sublicencia y/o venta de copias del software,
-sujeto a las siguientes condiciones:
-
-El aviso de copyright anterior y este aviso de permiso se incluirán en todas las
-copias o partes sustanciales del software.
-
-EL SOFTWARE SE PROPORCIONA "TAL CUAL", SIN GARANTÍA DE NINGÚN TIPO, EXPRESA O
-IMPLÍCITA.
-```
-
-Libre de usar, modificar y distribuir.
-
-## 👤 Autor
-
-Proyecto desarrollado como microservicio de calificación de leads con IA.
+- 💻 GitHub: [github.com/TogerAndres](https://github.com/TogerAndres)
+- 💼 LinkedIn: [roger-andrés-alvarez-diaz](https://www.linkedin.com/in/roger-andrés-alvarez-diaz-52b395333/)
