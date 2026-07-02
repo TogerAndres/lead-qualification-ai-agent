@@ -1,98 +1,174 @@
-# Lead Qualification Agent 🤖
+<div align="center">
 
-Microservicio que califica leads recibidos por Telegram contra un ICP (Ideal
-Customer Profile) usando Gemini, con salida estructurada, logging a Google
-Sheets, y observabilidad básica (health checks + métricas). Diseñado para
-correr en Cloud Run, sin credenciales en disco.
+<img src="capturas/LogoChatBot.png" alt="Lead Qualification Agent Logo" width="160">
 
-## Arquitectura
+# 🤖 Lead Qualification Agent
+
+### Un bot de Telegram que califica leads por ti, en segundos y sin criterio humano de por medio.
+
+Microservicio que recibe mensajes de leads por Telegram, los evalúa contra un **ICP (Ideal
+Customer Profile)** usando Gemini con salida estructurada, registra cada resultado en
+Google Sheets y expone métricas básicas — todo pensado para correr en Cloud Run sin
+credenciales en disco.
+
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Flask](https://img.shields.io/badge/Flask-3.1-000000?logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
+[![Telegram Bot](https://img.shields.io/badge/python--telegram--bot-21.3-26A5E4?logo=telegram&logoColor=white)](https://python-telegram-bot.org/)
+[![Gemini](https://img.shields.io/badge/Gemini%202.5%20Flash-LLM-4285F4?logo=googlegemini&logoColor=white)](https://ai.google.dev/)
+[![Cloud Run](https://img.shields.io/badge/Deploy-Cloud%20Run-4285F4?logo=googlecloud&logoColor=white)](https://cloud.google.com/run)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](#-licencia)
+
+</div>
+
+<br>
+
+<p align="center">
+  <img src="capturas/Lead-Cualificado.png" alt="Ejemplo de lead calificado por el bot" width="420">
+</p>
+
+---
+
+## 📌 ¿Qué problema resuelve?
+
+Cuando entran leads por chat (web, campañas, formularios conectados a Telegram), alguien del
+equipo tiene que leerlos uno por uno y decidir si valen la pena antes de pasarlos a ventas.
+Eso no escala, es lento y depende del criterio de quien esté de turno ese día.
+
+**Lead Qualification Agent** automatiza ese primer filtro: recibe el mensaje del lead,
+lo evalúa contra un perfil de cliente ideal usando un LLM con **salida estructurada
+(no texto libre)**, responde al instante con un score y un análisis, y deja todo
+registrado en una Google Sheet lista para que ventas la revise.
+
+## ✨ Features
+
+- 🤖 **Bot de Telegram listo para producción**, con comandos `/start`, `/help` y `/about`
+  autoregistrados vía Bot API al arrancar (nada que configurar a mano en BotFather).
+- 🧠 **Clasificación con salida estructurada real**: Gemini responde con un schema de
+  Pydantic (`response_schema`), no con JSON parseado a mano — se elimina toda una clase
+  de errores de parseo.
+- 🛡️ **Resistente a prompt injection**: el texto del lead siempre viaja delimitado
+  (`<lead_data>...</lead_data>`) y el modelo solo puede rellenar los campos del schema,
+  nunca "responder libremente".
+- 🧯 **Fail-safe, no fail-open**: si algo falla (red, cuota, parseo), el lead se marca
+  como NO calificado con confianza baja — nunca al revés.
+- 📊 **Logging automático a Google Sheets** vía Application Default Credentials, sin
+  ningún JSON de credenciales en el repo ni en el contenedor.
+- 📈 **Métricas en memoria** expuestas en `/metrics`: leads procesados, calificados,
+  rechazados, score promedio y tiempo de respuesta.
+- ☁️ **Cloud Run first**: health checks, arranque rápido, sin estado en disco y Service
+  Account con permisos mínimos (solo Editor sobre la Sheet).
+
+## ⚙️ Cómo funciona
 
 ```
-                    Telegram
-                        │
-                        ▼
-                HTTPS Webhook  (POST /webhook)
-                        │
-                        ▼
-               Google Cloud Run  (Flask + Gunicorn)
-                        │
-         ┌──────────────┴──────────────┐
-         ▼                             ▼
-  Gemini 2.5 Flash              Google Sheets
-  (google-genai SDK,            (Application Default
-   response_schema)              Credentials — sin JSON)
+Telegram
+   │  Usuario envía un mensaje describiendo su empresa / necesidad
+   ▼
+HTTPS Webhook  (POST /webhook)
+   │  app.py valida el secret_token y delega a bot.process_update
+   ▼
+python-telegram-bot (bot.py)
+   │  Puente sync/async: entrega el update al Application,
+   │  dispara handlers.lead_message_handler
+   ▼
+llm_classifier.py
+   │  Llama a Gemini 2.5 Flash con response_schema=LeadDecision (Pydantic)
+   │  El texto del lead va delimitado como dato, nunca como instrucción
+   ▼
+Gemini 2.5 Flash
+   │  Devuelve un LeadDecision ya validado y tipado (score, criterios ICP,
+   │  decisión, confianza, análisis) — sin parseo manual de JSON
+   ▼
+Telegram + Google Sheets
+   Responde al usuario con el resultado y registra la fila
+   (fecha, empresa, empleados, ubicación, interés, score, decisión...)
+   vía sheets_logger.py (Google Sheets API + ADC, sin credenciales en disco)
 ```
 
-**Flujo de un mensaje:**
+## 🖼️ Capturas
 
-1. Telegram hace `POST /webhook` con el update en JSON.
-2. `app.py` valida el `secret_token` y delega a `bot.process_update`.
-3. `bot.py` (puente sync/async) entrega el update al `Application` de
-   `python-telegram-bot`, que dispara `handlers.lead_message_handler`.
-4. `llm_classifier.py` llama a Gemini con `response_schema=LeadDecision`
-   (Pydantic) — la respuesta ya llega validada, sin parseo manual de JSON.
-5. Se responde al usuario en Telegram y se registra el resultado en
-   `sheets_logger.py` (Google Sheets vía ADC).
-6. `metrics.py` acumula contadores en memoria, expuestos en `/metrics`.
+<table>
+<tr>
+<td width="50%">
 
-## Estructura del proyecto
+**Lead calificado**
+
+El bot responde en Telegram con el score contra el ICP, el desglose por criterio
+y un análisis en lenguaje natural generado por el modelo.
+
+<img src="capturas/Lead-Cualificado.png" alt="Lead calificado por el bot">
+
+</td>
+<td width="50%">
+
+**Resistencia a prompt injection**
+
+Un intento de manipular al modelo a través del texto del lead es ignorado: el
+`system_instruction` y el `response_schema` fuerzan al modelo a solo rellenar
+el schema, nunca a seguir instrucciones inyectadas en el mensaje.
+
+<img src="capturas/Prompt-Injection-Malo.png" alt="Ejemplo de intento de prompt injection bloqueado">
+
+</td>
+</tr>
+</table>
+
+## 🧰 Tech stack
+
+| Capa | Tecnología |
+|---|---|
+| Backend | Python 3.12, Flask 3.1 + Gunicorn |
+| Bot | python-telegram-bot 21.3 |
+| LLM | Gemini 2.5 Flash (`google-genai`, `response_schema`) |
+| Validación | Pydantic |
+| Logging de datos | Google Sheets API (gspread + Application Default Credentials) |
+| Infraestructura | Docker (`python:3.12-slim`) + Google Cloud Run |
+
+## 📁 Estructura del proyecto
 
 ```
 lead-qualification-agent/
 │
 ├── app.py                  # Entrada Flask: webhook, health check, métricas
 ├── bot.py                  # Application de Telegram + puente sync/async
-├── handlers.py              # Lógica de /start y mensajes de leads
-├── llm_classifier.py        # Clasificación con Gemini (google-genai, response_schema)
-├── sheets_logger.py         # Logging a Google Sheets vía ADC
-├── metrics.py                # Contadores en memoria
-├── config.py                 # Variables de entorno centralizadas
+├── handlers.py             # Lógica de /start y mensajes de leads
+├── llm_classifier.py       # Clasificación con Gemini (google-genai, response_schema)
+├── sheets_logger.py        # Logging a Google Sheets vía ADC
+├── metrics.py               # Contadores en memoria
+├── config.py                # Variables de entorno centralizadas
 │
 ├── requirements.txt
 ├── Dockerfile
 ├── .dockerignore
 ├── .env.example
 ├── .gitignore
-├── README.md
+│
+├── capturas/                # Capturas usadas en este README
 │
 └── scripts/
     └── set_webhook.py       # Registra el webhook ante Telegram tras el deploy
 ```
 
-## Tecnologías
-
-- Python 3.12
-- Flask 3.1 + Gunicorn
-- python-telegram-bot 21.3
-- google-genai 2.3 (SDK unificado, `response_schema`)
-- Google Sheets API (gspread + Application Default Credentials)
-- Docker (`python:3.12-slim`) + Cloud Run
-
-## Setup local
+## 🚀 Setup local
 
 ### 1. Bot de Telegram
 
-[@BotFather](https://t.me/BotFather) → `/newbot` → copia el token.
+Habla con [@BotFather](https://t.me/BotFather) → `/newbot` → copia el token.
 
 ### 2. API key de Gemini
 
-[Google AI Studio](https://aistudio.google.com/apikey) → crea una key.
+Créala en [Google AI Studio](https://aistudio.google.com/apikey).
 
-### 3. Google Sheets (desarrollo local)
+### 3. Google Sheets
 
-Para desarrollo local sin credenciales de Cloud Run, la forma más simple es:
+Para desarrollo local, la forma más simple es autenticarte con tu propia cuenta:
 
 ```bash
 gcloud auth application-default login
 ```
 
-Esto resuelve `google.auth.default()` automáticamente con tu propia cuenta de
-Google (debes tener acceso de Editor a la Sheet). Alternativa: generar un JSON
-de cuenta de servicio y apuntar `GOOGLE_APPLICATION_CREDENTIALS` a él (nunca
-se sube al repo — está en `.gitignore`).
-
-Crea la Sheet, copia su ID de la URL, y compártela con Editor a la cuenta que
-uses (tu propia cuenta o el email de la service account).
+Crea la Sheet, copia su ID de la URL y compártela con Editor a la cuenta que uses.
+No se necesita ningún JSON de credenciales en el repo.
 
 ### 4. Ejecutar
 
@@ -103,19 +179,30 @@ cp .env.example .env   # rellena las variables
 python app.py
 ```
 
-En local, Telegram no puede alcanzar tu `localhost` por webhook — para probar
-de extremo a extremo local necesitarías un túnel (ngrok, Cloudflare Tunnel).
-El flujo pensado es probar los endpoints (`/`, `/health`, `/metrics`) en local
-y el flujo completo ya desplegado en Cloud Run.
+> Telegram no puede alcanzar tu `localhost` por webhook. Para un flujo end-to-end en local
+> necesitarías un túnel (ngrok, Cloudflare Tunnel); el enfoque recomendado es probar los
+> endpoints (`/`, `/health`, `/metrics`) en local y el flujo completo ya desplegado.
 
-## Despliegue en Cloud Run
+## 🔐 Variables de entorno
+
+| Variable | Requerida | Descripción |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | Sí | Token del bot, obtenido en BotFather |
+| `TELEGRAM_WEBHOOK_SECRET` | No | Secreto validado en cada request al webhook (muy recomendado en producción) |
+| `GEMINI_API_KEY` | Sí | Key de Gemini, desde [aistudio.google.com](https://aistudio.google.com/apikey) |
+| `GEMINI_MODEL` | No | Modelo a usar (default `gemini-2.5-flash`) |
+| `GOOGLE_SHEET_ID` | Sí | ID de la Sheet donde se registran los leads |
+| `GOOGLE_SHEET_NAME` | No | Nombre de la hoja (default `Leads`) |
+| `PORT` | No | Puerto del servicio (default `8080`) |
+
+## ☁️ Despliegue en Cloud Run
 
 ```bash
 # 1. Build y push de la imagen
 gcloud builds submit --tag gcr.io/TU_PROYECTO/lead-qualification-agent
 
-# 2. Deploy — nota: SIN service_account.json, se asigna una Service Account
-#    con permisos de Editor sobre la Sheet directamente al servicio
+# 2. Deploy — sin service_account.json: la Service Account con permisos
+#    de Editor sobre la Sheet se asigna directamente al servicio
 gcloud run deploy lead-qualification-agent \
   --image gcr.io/TU_PROYECTO/lead-qualification-agent \
   --service-account TU_SERVICE_ACCOUNT@TU_PROYECTO.iam.gserviceaccount.com \
@@ -123,91 +210,53 @@ gcloud run deploy lead-qualification-agent \
   --allow-unauthenticated \
   --region us-central1
 
-# 3. Registrar el webhook ante Telegram (una sola vez, con la URL que te dio Cloud Run)
+# 3. Registrar el webhook ante Telegram (una sola vez)
 python scripts/set_webhook.py https://tu-servicio-xxxxx.run.app
 ```
 
-Para variables sensibles (`TELEGRAM_BOT_TOKEN`, `GEMINI_API_KEY`), en
-producción real se recomienda usar **Secret Manager** en vez de
-`--set-env-vars` en texto plano — ver "Qué cambiaría para producción real"
-más abajo.
+La Service Account de Cloud Run solo necesita permisos de **Editor** sobre la Google Sheet
+(compartida con su email `...@TU_PROYECTO.iam.gserviceaccount.com`) — no requiere roles de
+IAM adicionales a nivel de proyecto.
 
-La Service Account de Cloud Run necesita permisos de **Editor** sobre la
-Google Sheet (compártela con su email `...@TU_PROYECTO.iam.gserviceaccount.com`).
-No necesita ningún rol de IAM adicional a nivel de proyecto para Sheets —
-el acceso se controla compartiendo el documento, como con cualquier cuenta.
+## 🔌 Endpoints
 
-## Endpoints
+| Método | Ruta | Propósito |
+|---|---|---|
+| GET | `/` | Health check raíz (Cloud Run) → `OK` |
+| GET | `/health` | Health check explícito → `{"status": "ok"}` |
+| GET | `/version` | Versión y stack del servicio |
+| GET | `/metrics` | Leads procesados / calificados / rechazados, score y tiempo promedio |
+| POST | `/webhook` | Recibe updates de Telegram |
 
-| Método | Ruta        | Propósito                                          |
-|--------|-------------|-----------------------------------------------------|
-| GET    | `/`         | Health check raíz (Cloud Run) → `OK`                |
-| GET    | `/health`   | Health check explícito → `{"status": "ok"}`         |
-| GET    | `/version`  | Versión y stack del servicio (texto plano)          |
-| GET    | `/metrics`  | Leads procesados/cualificados/rechazados, score promedio, tiempo promedio |
-| POST   | `/webhook`  | Recibe updates de Telegram                          |
+## 💬 Comandos de Telegram
 
-## Comandos de Telegram
+| Comando | Qué hace |
+|---|---|
+| `/start` | Bienvenida y ejemplo de uso |
+| `/help` | Lista de comandos disponibles |
+| `/about` | Info técnica del proyecto (versión, modelo, stack) |
 
-| Comando   | Qué hace                                             |
-|-----------|-------------------------------------------------------|
-| `/start`  | Bienvenida y ejemplo de uso                            |
-| `/help`   | Lista de comandos disponibles                          |
-| `/about`  | Info técnica del proyecto (versión, modelo, stack)      |
+Estos comandos se registran automáticamente vía Bot API (`set_my_commands`,
+`set_my_description`) al arrancar el servicio — no hace falta tocar BotFather, salvo para
+la foto de perfil del bot (`/setuserpic`, algo que la Bot API no permite gestionar por código).
 
-Estos tres comandos, además de la descripción del bot, se registran
-**automáticamente vía Bot API** (`set_my_commands`, `set_my_description`,
-`set_my_short_description`) al arrancar el servicio — no hace falta
-configurarlos a mano en BotFather. Lo único que la Bot API no permite
-gestionar por código es la **foto de perfil del bot**: para eso sí necesitas
-hablar con [@BotFather](https://t.me/BotFather) → `/setuserpic`.
+## 📝 Ejemplo de uso
 
-## Ejemplo de uso
-
-**Usuario envía a través de Telegram:**
+**El usuario envía por Telegram:**
 > Empresa de consultoría, 15 empleados, Madrid, quieren automatizar su proceso de ventas.
 
-**Bot responde (edita el mensaje "Analizando..." con el resultado final):**
-```
-━━━━━━━━━━━━━━━━━━━━━━
-🤖 Lead Qualification AI
-━━━━━━━━━━━━━━━━━━━━━━
-
-🟢 LEAD CALIFICADO
-
-📈 Score: 96/100
-🟩🟩🟩🟩🟩  (confianza: alta)
-
-🏢 Empresa: Consultoría
-👥 Empleados: 15
-📍 Ubicación: Madrid
-💡 Interés: Automatización de ventas
-
-📋 Criterios ICP
-🏢 Empresa       ✅
-👥 Empleados     ✅
-📍 Ubicación     ✅
-💡 Interés       ✅
-
-🧠 Análisis
-Es una empresa de consultoría (encaja con el tipo de negocio), tiene 15
-empleados (supera el mínimo de 5), está en Madrid, España (región válida), y
-busca automatización de ventas (interés alineado con el ICP).
-
-━━━━━━━━━━━━━━━━━━━━━━
-⚡ Gemini 2.5 Flash
-```
-
-Y en la Google Sheet queda registrada una fila con: fecha, empresa, empleados,
-ubicación, interés, score, decisión, confianza, motivo, texto original del
-lead y `chat_id`. La primera vez que se usa la Sheet, el servicio crea
-automáticamente el encabezado con fondo verde, fila congelada y filtro básico.
+**El bot responde con el score contra el ICP y un análisis explicando el porqué** (ver
+captura arriba), y en la Google Sheet queda registrada una fila con fecha, empresa,
+empleados, ubicación, interés, score, decisión, confianza, motivo, texto original del lead
+y `chat_id`. La primera vez que se usa la Sheet, el servicio crea automáticamente el
+encabezado con formato.
 
 **Ejemplo de `/metrics`:**
+
 ```json
 {
   "leads_procesados": 12,
-  "leads_cualificados": 7,
+  "leads_calificados": 7,
   "leads_rechazados": 5,
   "errores_clasificacion": 0,
   "leads_hoy": 4,
@@ -217,45 +266,70 @@ automáticamente el encabezado con fondo verde, fila congelada y filtro básico.
 }
 ```
 
-## Decisiones de diseño relevantes
+## 🧠 Decisiones de diseño relevantes
 
-- **Salida estructurada real** (`response_schema=LeadDecision` con Pydantic,
-  no `json.loads` sobre texto libre): el SDK valida el schema del lado del
-  cliente y expone `response.parsed` ya tipado, eliminando una clase entera de
-  errores de parseo.
-- **Prompt injection**: el texto del lead siempre va delimitado
-  (`<lead_data>...</lead_data>`) y el `system_instruction` indica
-  explícitamente que todo lo que esté ahí dentro es dato, nunca instrucción.
-  Combinado con `response_schema`, el modelo no tiene forma de "responder
-  libremente": solo puede rellenar los campos del schema.
-- **Fail-safe, no fail-open**: cualquier fallo (red, cuota, parseo) hace que el
-  lead se marque como NO cualificado con confianza baja, nunca al revés.
-- **Sin credenciales en disco**: Google Sheets usa Application Default
-  Credentials — en Cloud Run resuelve automáticamente contra la Service
-  Account adjunta al servicio; en local, contra `gcloud auth application-default
-  login` o una variable de entorno que apunta a un archivo fuera del repo.
-- **Puente sync/async documentado**: Flask/Gunicorn son síncronos y
-  python-telegram-bot es async-first. En vez de reescribir todo el servicio en
-  asyncio, se corre un único event loop persistente en un hilo de fondo, y se
-  programan corrutinas desde el handler síncrono con
-  `asyncio.run_coroutine_threadsafe`.
-- **Un fallo en Sheets nunca tumba el bot**: el usuario recibe su respuesta
-  aunque el logging falle; el error queda en logs para revisión.
-- **Métricas en memoria con limitación conocida**: al vivir en el proceso, si
-  Cloud Run escala a más de una instancia cada una lleva su propio contador.
-  Documentado explícitamente — no se presenta como más de lo que es.
+- **Salida estructurada real**: `response_schema=LeadDecision` (Pydantic) en vez de
+  `json.loads` sobre texto libre — el SDK valida del lado del cliente y expone
+  `response.parsed` ya tipado.
+- **Prompt injection**: el texto del lead siempre va delimitado y el `system_instruction`
+  aclara que todo lo que hay ahí dentro es dato, nunca instrucción — combinado con el
+  schema, el modelo no tiene forma de "responder libremente".
+- **Fail-safe, no fail-open**: cualquier fallo hace que el lead se marque como NO
+  calificado con confianza baja, nunca al revés.
+- **Sin credenciales en disco**: Google Sheets usa Application Default Credentials —
+  en Cloud Run resuelve contra la Service Account del servicio; en local, contra
+  `gcloud auth application-default login`.
+- **Puente sync/async documentado**: Flask/Gunicorn son síncronos y python-telegram-bot es
+  async-first; se corre un event loop persistente en un hilo de fondo y se programan
+  corrutinas con `asyncio.run_coroutine_threadsafe`.
+- **Un fallo en Sheets nunca tumba el bot**: el usuario recibe su respuesta igual aunque
+  el logging falle; el error queda en logs para revisión.
+- **Métricas en memoria con limitación conocida**: si Cloud Run escala a más de una
+  instancia, cada una lleva su propio contador — documentado, no se presenta como más de
+  lo que es.
 
-## Qué cambiaría para producción real
+## 🔭 Qué cambiaría para producción real
 
-1. **Secretos y colas reales**: movería `TELEGRAM_BOT_TOKEN` y `GEMINI_API_KEY`
-   a Secret Manager (no como env vars en texto plano), y añadiría una cola
-   (Cloud Tasks/Pub-Sub) entre el webhook y el procesamiento para no perder
-   updates si Gemini tarda o el servicio se reinicia a mitad de proceso.
-2. **Rate limiting y control de costes**: limitaría mensajes por
-   usuario/minuto y pondría un tope diario de llamadas a Gemini con alertas de
-   presupuesto (Cloud Monitoring), para que nadie pueda saturar el bot con
-   mensajes repetidos y disparar la factura.
-3. **Prompt injection y auditoría reforzada**: además del delimitado actual,
-   añadiría un paso de moderación previo (o un modelo más barato) que detecte
-   intentos de manipulación explícitos antes de pasar el texto al clasificador
-   principal, registrando esos intentos por separado para revisión del equipo.
+1. **Secretos y colas reales**: mover `TELEGRAM_BOT_TOKEN` y `GEMINI_API_KEY` a Secret
+   Manager, y añadir una cola (Cloud Tasks/Pub-Sub) entre el webhook y el procesamiento
+   para no perder updates si Gemini tarda o el servicio se reinicia a mitad de proceso.
+2. **Rate limiting y control de costes**: limitar mensajes por usuario/minuto y poner un
+   tope diario de llamadas a Gemini con alertas de presupuesto.
+3. **Prompt injection y auditoría reforzada**: añadir un paso de moderación previo que
+   detecte intentos de manipulación explícitos antes del clasificador principal,
+   registrándolos por separado para revisión del equipo.
+
+## 💼 Cómo pitchearlo en un CV
+
+> Construí un microservicio que califica leads recibidos por Telegram contra un ICP usando
+> Gemini con salida estructurada (Pydantic), con logging automático a Google Sheets y
+> observabilidad básica, desplegado en Cloud Run sin credenciales en disco y con
+> mitigaciones explícitas contra prompt injection.
+
+## 📄 Licencia
+
+Este proyecto está bajo la licencia **MIT**.
+
+```
+MIT License
+
+Copyright (c) 2026 Lead Qualification Agent
+
+Se concede permiso, sin cargo, a cualquier persona que obtenga una copia de este
+software y de los archivos de documentación asociados, para utilizar el software
+sin restricción, incluyendo sin limitación los derechos de uso, copia, modificación,
+fusión, publicación, distribución, sublicencia y/o venta de copias del software,
+sujeto a las siguientes condiciones:
+
+El aviso de copyright anterior y este aviso de permiso se incluirán en todas las
+copias o partes sustanciales del software.
+
+EL SOFTWARE SE PROPORCIONA "TAL CUAL", SIN GARANTÍA DE NINGÚN TIPO, EXPRESA O
+IMPLÍCITA.
+```
+
+Libre de usar, modificar y distribuir.
+
+## 👤 Autor
+
+Proyecto desarrollado como microservicio de calificación de leads con IA.
