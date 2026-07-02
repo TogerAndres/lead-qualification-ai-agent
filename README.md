@@ -143,23 +143,65 @@ el acceso se controla compartiendo el documento, como con cualquier cuenta.
 |--------|-------------|-----------------------------------------------------|
 | GET    | `/`         | Health check raíz (Cloud Run) → `OK`                |
 | GET    | `/health`   | Health check explícito → `{"status": "ok"}`         |
-| GET    | `/metrics`  | Leads procesados/cualificados/rechazados, tiempo promedio |
+| GET    | `/version`  | Versión y stack del servicio (texto plano)          |
+| GET    | `/metrics`  | Leads procesados/cualificados/rechazados, score promedio, tiempo promedio |
 | POST   | `/webhook`  | Recibe updates de Telegram                          |
+
+## Comandos de Telegram
+
+| Comando   | Qué hace                                             |
+|-----------|-------------------------------------------------------|
+| `/start`  | Bienvenida y ejemplo de uso                            |
+| `/help`   | Lista de comandos disponibles                          |
+| `/about`  | Info técnica del proyecto (versión, modelo, stack)      |
+
+Estos tres comandos, además de la descripción del bot, se registran
+**automáticamente vía Bot API** (`set_my_commands`, `set_my_description`,
+`set_my_short_description`) al arrancar el servicio — no hace falta
+configurarlos a mano en BotFather. Lo único que la Bot API no permite
+gestionar por código es la **foto de perfil del bot**: para eso sí necesitas
+hablar con [@BotFather](https://t.me/BotFather) → `/setuserpic`.
 
 ## Ejemplo de uso
 
 **Usuario envía a través de Telegram:**
 > Empresa de consultoría, 15 empleados, Madrid, quieren automatizar su proceso de ventas.
 
-**Bot responde:**
-> ✅ **CUALIFICADO** (confianza: alta)
->
-> Es una empresa de consultoría (encaja con el tipo de negocio), tiene 15
-> empleados (supera el mínimo de 5), está en Madrid, España (región válida), y
-> busca automatización de ventas (interés alineado con el ICP).
+**Bot responde (edita el mensaje "Analizando..." con el resultado final):**
+```
+━━━━━━━━━━━━━━━━━━━━━━
+🤖 Lead Qualification AI
+━━━━━━━━━━━━━━━━━━━━━━
 
-Y en la Google Sheet queda registrada una fila con fecha, texto original,
-decisión, motivo, confianza y `chat_id`.
+🟢 LEAD CALIFICADO
+
+📈 Score: 96/100
+🟩🟩🟩🟩🟩  (confianza: alta)
+
+🏢 Empresa: Consultoría
+👥 Empleados: 15
+📍 Ubicación: Madrid
+💡 Interés: Automatización de ventas
+
+📋 Criterios ICP
+🏢 Empresa       ✅
+👥 Empleados     ✅
+📍 Ubicación     ✅
+💡 Interés       ✅
+
+🧠 Análisis
+Es una empresa de consultoría (encaja con el tipo de negocio), tiene 15
+empleados (supera el mínimo de 5), está en Madrid, España (región válida), y
+busca automatización de ventas (interés alineado con el ICP).
+
+━━━━━━━━━━━━━━━━━━━━━━
+⚡ Gemini 2.5 Flash
+```
+
+Y en la Google Sheet queda registrada una fila con: fecha, empresa, empleados,
+ubicación, interés, score, decisión, confianza, motivo, texto original del
+lead y `chat_id`. La primera vez que se usa la Sheet, el servicio crea
+automáticamente el encabezado con fondo verde, fila congelada y filtro básico.
 
 **Ejemplo de `/metrics`:**
 ```json
@@ -168,6 +210,8 @@ decisión, motivo, confianza y `chat_id`.
   "leads_cualificados": 7,
   "leads_rechazados": 5,
   "errores_clasificacion": 0,
+  "leads_hoy": 4,
+  "score_promedio": 61.3,
   "tiempo_promedio_respuesta_segundos": 1.842,
   "uptime_segundos": 3421.6
 }

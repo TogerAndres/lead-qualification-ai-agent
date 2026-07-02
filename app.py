@@ -3,6 +3,7 @@ Entrada Flask del microservicio. Expone:
 
   GET  /            -> health check simple para Cloud Run ("OK")
   GET  /health       -> health check explícito (JSON)
+  GET  /version      -> versión y stack del servicio (texto plano)
   GET  /metrics      -> métricas en memoria del servicio
   POST /webhook      -> recibe updates de Telegram
 
@@ -41,6 +42,19 @@ def index():
 def health():
     """Health check explícito en JSON, útil para monitoreo externo."""
     return jsonify({"status": "ok"}), 200
+
+
+@app.get("/version")
+def version():
+    """Info de versión y stack — útil para verificar qué revisión está corriendo en Cloud Run."""
+    return (
+        "Lead Qualification AI\n"
+        "Version 1.0.0\n"
+        "Gemini 2.5 Flash\n"
+        "Cloud Run\n"
+        "Google Sheets\n"
+        "Telegram Bot\n"
+    ), 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 @app.get("/metrics")
